@@ -6,6 +6,7 @@ import json
 import sys
 
 conda_root = '/cvmfs/test.galaxyproject.org/deps/_conda'
+channel = '/cvmfs/test.galaxyproject.org/deps/_conda_tmp/channel/noarch'
 stashfile = 'stash.json'
 
 
@@ -44,6 +45,7 @@ def set_to():
     stash = None
     with open(stashfile) as fh:
         stash = json.load(fh)
+    # fix env pkg json files
     for jsonf in glob.glob(conda_root + '/envs/*/conda-meta/*.json'):
         meta = None
         with open(jsonf) as fh:
@@ -63,6 +65,21 @@ def set_to():
         with open(jsonf, 'w') as fh:
             json.dump(meta, fh, indent=2, separators=(',', ': '), sort_keys=True)
             fh.write('\n')
+    # fix urls.txt
+    urls = []
+    urlsf = conda_root + '/pkgs/urls.txt'
+    with open(urlsf) as fh:
+        for url in fh:
+            if url.startswith('file://' + channel):
+                name = url.split('/')[-1].replace('.tar.bz2\n', '')
+                if name in stash:
+                    url = stash[name]['url'] + '\n'
+                else:
+                    print("Can't fix urls.txt entry for '{name}': not in stash".format(name=name))
+            urls.append(url)
+    shutil.copy(urlsf, urlsf + '.backup')
+    with open(urlsf, 'w') as fh:
+        fh.write(''.join(urls))
 
 
 if __name__ == '__main__':

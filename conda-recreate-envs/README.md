@@ -24,4 +24,4 @@ on the same host.
     a. `conda index /path/to/index/noarch`
     b. run createcmds.sh to create envs
     c. run `fixenvjson.py to` to fix up env pkg jsons
-    d. `rm envs/*/conda-meta/*.backup` once satisfied
+    d. `rm envs/*/conda-meta/*.backup pkgs/urls.txt.backup` once satisfied
