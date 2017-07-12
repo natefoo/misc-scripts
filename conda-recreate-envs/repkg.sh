@@ -23,10 +23,10 @@ for d in $(find -maxdepth 1 ! -path . -type d -printf '%P\n'); do
                 continue_me=1
                 break
             fi
-            python -c "import json; x = json.load(open('$json')); print x['url'], x['md5']" | read pkgurl pkgmd5
+            read pkgurl pkgmd5 < <(python -c "import json; x = json.load(open('$json')); print x['url'], x['md5']")
             [ -n "$pkgurl" ] && break
         done
-        [ $continue_me ] && continue
+        [ $continue_me -eq 1 ] && continue
         if [ -n "$pkgurl" ]; then
             echo "fetching $pkgurl obtained from $json"
             curl -L $pkgurl >$savetb
