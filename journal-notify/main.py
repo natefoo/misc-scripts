@@ -13,11 +13,18 @@ import select
 import sys
 
 from systemd import journal
+from systemd.id128 import get_boot
 
 
 MUTEX = os.path.expanduser(os.path.join('~', '.journal-notify.lock'))
 OOM_MESSAGE_START = re.compile('^.* invoked oom-killer: .*$')
 OOM_MESSAGE_END = re.compile('^Killed process .*')
+
+
+class timedelta(datetime.timedelta):
+    # there's a bug in systemd.journal that attempts to access this method
+    def totalseconds(self):
+        return self.total_seconds()
 
 
 def _exit(msg, *args, **kwargs):
@@ -45,7 +52,8 @@ class LockFile(object):
         kwargs = {}
         if first_attempt:
             kwargs.update({'ignore': (errno.EEXIST,), 'callback': self.__handle_stale})
-        self.__fd = self.__open(os.O_CREAT | os.O_EXCL, **kwargs)
+        self.__fd = self.__open(os.O_WRONLY | os.O_CREAT | os.O_EXCL, **kwargs)
+        return self.__fd
 
     '''
         if r == (-1, errno.EEXIST) and attempt < 1:
@@ -59,13 +67,10 @@ class LockFile(object):
     '''
 
     def __handle_stale(self):
-        # FIXME testing
-        import time
-        time.sleep(5)
         fd = self.__open(os.O_RDONLY, (errno.ENOENT,), lambda: self.__acquire(False))
         if self.__fd is not None:
             # second self.__acquire succeeded
-            return
+            return self.__fd
         pid = os.read(fd, 5)
         try:
             assert not os.read(fd, 1), 'Contains extra data'
@@ -77,14 +82,16 @@ class LockFile(object):
         except OSError:
             print('Removing stale lock file: {}'.format(self.__fname), file=sys.stderr)
             os.unlink(self.__fname)
-            self.__acquire(False)
+            return self.__acquire(False)
         else:
             _exit('Process is still running: {}', pid)
 
 
     def __enter__(self):
         self.__acquire()
-        os.write(self.__fd, os.getpid())
+        os.write(self.__fd, str(os.getpid()))
+        os.fsync(self.__fd)
+        os.lseek(self.__fd, 0, 0)
 
     def __exit__(self, exc_type, exc_val, traceback):
         os.close(self.__fd)
@@ -148,12 +155,25 @@ class JournalReader(object):
             elif match:
                 match.append(event)
 
-    def get_matching_events(self):
+    def _last_monotonic(self, boot_id=None):
+        if not boot_id:
+            boot_id = get_boot()
+        return timedelta(0, self._state.get(str(boot_id), 0))
+
+    def get_matching_events(self, boot_id=None):
+        #print(self._reader.query_unique('_BOOT_ID'))
+        if not boot_id:
+            boot_id = get_boot()
+        last_monotonic = self._last_monotonic()
+        self._reader.seek_monotonic(last_monotonic)
         if self._multiline_match:
             for match in self._next_multiline_match():
+                last_monotonic = match[-1]['__MONOTONIC_TIMESTAMP'][0]
                 print( match[0]['__REALTIME_TIMESTAMP'])
                 for line in match:
-                    print(line['MESSAGE'])
+                    print(line['_BOOT_ID'], line['MESSAGE'])
+        self._state[str(boot_id)] = last_monotonic.total_seconds()
+        self._dump_state()
         #for event in self._reader:
         #    print event
         #while True:
