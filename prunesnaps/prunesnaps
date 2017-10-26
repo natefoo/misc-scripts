@@ -13,7 +13,7 @@ Prune ZFS snapshots
 Options:
     -h      print this help message and exit
     -n      no changes (dry run)
-    -v      print keeps/prunes to stdout
+    -v      print keeps/prunes to stdout (-vv for debug output)
     -r <n>  number of hours to keep hourly snapshots for
     -d <n>  number of days to keep daily snapshots for
     -w <n>  number of weeks to keep weekly snapshots for
@@ -52,9 +52,11 @@ SECONDS[w]=$(( 60 * 60 * 24 * 7 ))
 SECONDS[m]=$(( 60 * 60 * 24 * 31 ))  # monthish
 SECONDS[y]=$(( 60 * 60 * 24 * 365 ))
 
+ZFS_GET='check_output zfs get -H -o name name "$dataset"'
 ZFS_LIST='check_output zfs list -Hp -t snapshot -o name,creation -S creation'
 ZFS_DESTROY='check_output zfs destroy $snap'
 # useful for testing
+#ZFS_GET='true'
 #ZFS_LIST='cat snaps'
 #ZFS_DESTROY='cp snaps _snaps; grep -v $snap _snaps > snaps'
 
@@ -88,7 +90,7 @@ function isint() {
 }
 
 function check_output() {
-    [ $VERBOSE -eq 1 ] && set -x
+    [ $VERBOSE -ge 2 ] && set -x
     "$@" || { exit $?; } 2>/dev/null
     { set +x; } 2>/dev/null  # not necessary if we're always called in a subshell
 }
@@ -105,7 +107,7 @@ function setopts() {
                 DRYRUN=1
                 ;;
             v)
-                VERBOSE=1
+                VERBOSE=$((VERBOSE + 1))
                 ;;
             r|d|w|m|y)
                 PRUNE[$opt]="$OPTARG"
@@ -139,7 +141,7 @@ function validate_datasets() {
     local exit=
     for dataset in "${DATASETS[@]}"; do
         # subshell so we can check all datasets before exiting
-        (check_output zfs get -H -o name name "$dataset" >/dev/null) || exit=2
+        (eval $ZFS_GET >/dev/null) || exit=2
     done
     [ -z "$exit" ] || { echo "ERROR: invalid dataset name(s)"; exit $exit; }
 }
@@ -174,8 +176,10 @@ function calculate_prune() {
     typeset -n snaps="SNAPS_${varname}"
     typeset -n times="TIMES_${varname}"
     typeset -n ops="OPS_${varname}"
+    typeset -n prunect="PRUNECT_${varname}"
     local offset="${times[0]}"
     local last=$((offset + 60 * 60))
+    prunect=0
     ops=()
     for period in ${FLAGS[@]}; do
         last=$((last / SECONDS[$period]))
@@ -188,6 +192,7 @@ function calculate_prune() {
                 break;
             elif [ "$last" == "$floor" ]; then
                 ops[$i]='-'
+                prunect=$((prunect + 1))
             else
                 ops[$i]='+'
             fi
@@ -216,11 +221,12 @@ function prune() {
     typeset -n snaps="SNAPS_${varname}"
     typeset -n times="TIMES_${varname}"
     typeset -n ops="OPS_${varname}"
-    [ "$VERBOSE" -eq 0 ] && echo -n "Pruning from ${#snaps[@]} snapshots of $dataset...  " >&2
+    typeset -n prunect="PRUNECT_${varname}"
+    [ "$VERBOSE" -eq 0 ] && echo -n "Pruning $prunect of ${#snaps[@]} snapshots of $dataset...  " >&2
     for (( i=0 ; i < ${#snaps[@]} ; i++ )); do
         op="${ops[$i]}"
         snap="${dataset}@${snaps[$i]}"
-        if [ "$VERBOSE" -eq 1 ]; then
+        if [ "$VERBOSE" -gt 0 ]; then
             echo "${ops[$i]} $snap"
         elif [ "${ops[$i]}" == '-' ]; then
             for (( j=0 ; j < ${#c} ; j++ )); do
@@ -229,11 +235,15 @@ function prune() {
         fi
         if [ "${ops[$i]}" == '-' ]; then
             c=$((c+1))
-            echo -n "$c"
+            [ "$VERBOSE" -eq 0 ] && echo -n "$c" >&2
             [ "$DRYRUN" -eq 0 ] && eval $ZFS_DESTROY
         fi
     done
-    echo " done" >&2
+    if [ "$VERBOSE" -eq 0 ]; then
+        echo " done" >&2
+    else
+        echo "Pruned $c of ${#snaps[@]} snapshots of $dataset" >&2
+    fi
 }
 
 function prunes() {
