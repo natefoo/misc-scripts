@@ -19,3 +19,8 @@ exact versions of when they were created. Unfortunately, Continuum had removed
 some of the necessary packages from their channel, and I had removed some of
 the tarballs in `pkgs`, meaning that they had to be refetched (when possible)
 and recreated from the unpacked package (when not).
+
+### prunesnaps
+
+Prune ZFS snapshots on a rolling basis, keeping snapshots at larger time
+intervals as they get older.
