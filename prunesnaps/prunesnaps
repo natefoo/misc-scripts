@@ -3,7 +3,6 @@ set -e
 #set -xv
 
 base=$(basename $0)
-basesp=$(printf ' %0.s' $(seq 0 ${#base}))
 USAGE1="usage:
   $base [-nv] [-r hours] [-d days] [-w weeks] [-m months] [-y years] dataset...
   $base -h"
@@ -32,6 +31,9 @@ Prune time is calculated from the time of the newest snapshot for the given data
 Examples:
   Keep 48 hours worth of hourly snapshots, 14 days worth of daily snapshots, 8 weeks worth of weekly snapshots, and monthly snapshots forever, of tank/important:
   # $base -r 48 -d 14 -w 8 -m -1 tank/important
+
+  Keep 30 days worth of daily snapshots, 26 weeks worth of weekly snapshots, and delete all older snapshots of tank/stuff:
+  # $base -d 30 -w 26 tank/stuff
 
   Delete all snapshots of tank/scratch and tank/scratch2:
   # $base -r0 tank/scratch tank/scratch2"
