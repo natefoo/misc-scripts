@@ -24,3 +24,7 @@ and recreated from the unpacked package (when not).
 
 Prune ZFS snapshots on a rolling basis, keeping snapshots at larger time
 intervals as they get older.
+
+### slurm-view
+
+Views of slurm probably mostly only useful for me (multicluster environment with shifting partition composition).
