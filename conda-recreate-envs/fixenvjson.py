@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 
+import os.path
+import hashlib
 import shutil
 import glob
 import json
 import sys
 
-conda_root = '/cvmfs/test.galaxyproject.org/deps/_conda'
-channel = '/cvmfs/test.galaxyproject.org/deps/_conda_tmp/channel/noarch'
+conda_root = '/cvmfs/main.galaxyproject.org/deps/_conda'
+channel = '/home/g2main/conda/noarch'
 stashfile = 'stash.json'
 
 
@@ -23,14 +25,25 @@ def get_from():
     stash = {}
     for jsonf in glob.glob(conda_root + '/envs/*/conda-meta/*.json'):
         meta = None
+        print jsonf
         with open(jsonf) as fh:
             meta = json.load(fh)
         name = get_name_from_meta(meta)
+        if 'schannel' not in meta and 'channel' not in meta:
+            if meta['url'].startswith('https://repo.continuum.io/'):
+                meta['channel'] = 'https://repo.continuum.io/pkgs/free/linux-64/'
+            else:
+                meta['channel'] = os.path.dirname(meta['url']) + '/'
         if 'schannel' not in meta:
             if meta['channel'].startswith('https://repo.continuum.io/'):
                 meta['schannel'] = 'defaults'
             else:
                 meta['schannel'] = meta['channel'].split('/')[3]
+        if 'md5' not in meta:
+            md5 = hashlib.md5()
+            md5.update(open('tarballs/%s' % os.path.basename(meta['url']), 'rb').read())
+            meta['md5'] = md5.hexdigest()
+        print meta['schannel'], meta['channel'], meta['url']
         stash[name] = {
                 'channel': meta['channel'],
                 'schannel': meta['schannel'],
