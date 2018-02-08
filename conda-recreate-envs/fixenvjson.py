@@ -64,16 +64,19 @@ def set_to():
         with open(jsonf) as fh:
             meta = json.load(fh)
         name = get_name_from_meta(meta)
+        if name not in stash:
+            print("WARNING: not in stash: %s" % name)
+            continue
         if meta['url'] != stash[name]['url'] or meta['channel'] != stash[name]['channel']:
             meta['channel'] = stash[name]['channel']
             meta['schannel'] = stash[name]['schannel']
             meta['url'] = stash[name]['url']
             if meta['md5'] != stash[name]['md5']:
                 print("WARNING: md5s do not match")
-            print("Writing channel '{channel}' url '{url}' to '{json_file}'".format(
-                    channel=meta['channel'],
-                    url=meta['url'],
-                    json_file=jsonf))
+            #print("Writing channel '{channel}' url '{url}' to '{json_file}'".format(
+            #        channel=meta['channel'],
+            #        url=meta['url'],
+            #        json_file=jsonf))
         shutil.copy(jsonf, jsonf + '.backup')
         with open(jsonf, 'w') as fh:
             json.dump(meta, fh, indent=2, separators=(',', ': '), sort_keys=True)
