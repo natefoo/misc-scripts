@@ -2,6 +2,8 @@
 set -e
 #set -xv
 
+MUTEX='/var/run/prunesnaps.pid'
+
 base=$(basename $0)
 USAGE1="usage:
   $base [-nv] [-r hours] [-d days] [-w weeks] [-m months] [-y years] dataset...
@@ -13,6 +15,7 @@ Prune ZFS snapshots
 Options:
     -h      print this help message and exit
     -n      no changes (dry run)
+    -l      log to syslog
     -v      print keeps/prunes to stdout (-vv for debug output)
     -r <n>  number of hours to keep hourly snapshots for
     -d <n>  number of days to keep daily snapshots for
@@ -24,7 +27,7 @@ The time period options (-r, -d, -w, -m, -y) are processed in order from shortes
 
 The time periods are additive, for example, '-r 6 -d 4 -w 2' will keep about 18.5 days worth of snapshots.
 
-Any snapshot older than those matched by the period options will be pruned, this behavior can be changed by setting a period option to '-1', which means \"keep monthly snapshots forever\".
+Any snapshot older than those matched by the period options will be pruned, this behavior can be changed by setting a period option to '-1', which means \"keep snapshots at this period forever\".
 
 Prune time is calculated from the time of the newest snapshot for the given dataset, so if you stop snapshotting, $base will never remove more snapshots when run with the same options.
 
@@ -38,8 +41,12 @@ Examples:
   Delete all snapshots of tank/scratch and tank/scratch2:
   # $base -r0 tank/scratch tank/scratch2"
 
+: ${PRUNESNAPSRC:="/etc/prunesnaps/prunesnaps.conf"}
+
 DATASETS=()
 DRYRUN=0
+LOGGER=0
+FACILITY=daemon
 VERBOSE=0
 FLAGS=(r d w m y)
 typeset -A PRUNE SECONDS
@@ -64,10 +71,41 @@ ZFS_DESTROY='check_output zfs destroy $snap'
 export TZ=UTC
 
 
+function get_mutex() {
+    if [ -f "$MUTEX" ]; then
+        pid="$(cat $MUTEX)"
+        if ! ps -p $pid >/dev/null; then
+            log warning "removing stale pid file $MUTEX"
+        else
+            log err "another process is still running: $pid"
+            exit 1
+        fi
+    fi
+    echo $$ > $MUTEX
+}
+
+function output() {
+    level=$1; shift
+    if [ $LOGGER -eq 0 ]; then
+        echo "$*"
+    else
+        logger -i -p${FACILITY}.${level} -t$base -- "$*"
+    fi
+}
+
+function log() {
+    level=$1; shift
+    if [ $LOGGER -eq 0 ]; then
+        echo "$(echo $level: | tr a-z A-Z) $*" >&2
+    else
+        output $level "$@"
+    fi
+}
+
 function checkarr() {
     # requires bash >= 4.3
     typeset -n t="$1"
-    [ "${#t[@]}" -gt 0 ] || { echo "ERROR: required array variable \$$1 is empty"; return 1; } >&2
+    [ "${#t[@]}" -gt 0 ] || { log err "required array variable \$$1 is empty"; return 1; }
 }
 
 function isintorempty() {
@@ -76,7 +114,7 @@ function isintorempty() {
     #   empty: return 1
     #   not an integer: return 2
     [ -n "${!1}" ] || return 1
-    [ "${!1}" -eq "${!1}" ] 2>/dev/null || { rc=$?; [ $rc -ne 2 ] || { echo "ERROR: invalid non-integer value for ${2:-"\$$1"}: ${!1}"; }; return $rc; } >&2
+    [ "${!1}" -eq "${!1}" ] 2>/dev/null || { rc=$?; [ $rc -ne 2 ] || { log err "invalid non-integer value for ${2:-"\$$1"}: ${!1}"; }; return $rc; }
     return 0
 }
 
@@ -84,7 +122,7 @@ function isint() {
     if isintorempty $1 $2; then
         return 0
     else
-        [ $? -ne 1 ] || echo "ERROR: ${2:-"\$$1"} value cannot be empty string" >&2
+        [ $? -ne 1 ] || log err "${2:-"\$$1"} value cannot be empty string"
         return 1
     fi
 }
@@ -95,9 +133,13 @@ function check_output() {
     { set +x; } 2>/dev/null  # not necessary if we're always called in a subshell
 }
 
+function readrc() {
+    [ ! -f "$PRUNESNAPSRC" ] || . "${PRUNESNAPSRC}"
+}
+
 function setopts() {
     local exit=
-    while getopts ':hnvr:d:w:m:y:' opt; do
+    while getopts ':hnlvr:d:w:m:y:' opt; do
         case $opt in
             h)
                 echo "$USAGE" | fmt -$(tput cols) -st
@@ -105,6 +147,9 @@ function setopts() {
                 ;;
             n)
                 DRYRUN=1
+                ;;
+            l)
+                LOGGER=1
                 ;;
             v)
                 VERBOSE=$((VERBOSE + 1))
@@ -124,7 +169,8 @@ function setopts() {
         esac
     done
     shift "$((OPTIND - 1))"
-    DATASETS=("$@")
+    _DATASETS=("$@")
+    [ -z "$_DATASETS" ] || DATASETS=$_DATASETS
     checkarr DATASETS || exit=2
     [ -z "$exit" ] || { echo "$USAGE1"; exit $exit; } >&2
 }
@@ -133,6 +179,11 @@ function validate_opts() {
     # turn everything in to seconds
     for period in ${FLAGS[@]}; do
         PRUNE[$period]=$((PRUNE[$period] * ${SECONDS[$period]}))
+    done
+    for dataset in $DATASETS; do
+        for period in ${FLAGS[@]}; do
+            [ -z "${PRUNE[${dataset}-${period}]}" ] || PRUNE[${dataset}-${period}]=$((PRUNE[${dataset}-${period}] * ${SECONDS[$period]}))
+        done
     done
 }
 
@@ -143,15 +194,15 @@ function validate_datasets() {
         # subshell so we can check all datasets before exiting
         (eval $ZFS_GET >/dev/null) || exit=2
     done
-    [ -z "$exit" ] || { echo "ERROR: invalid dataset name(s)"; exit $exit; }
+    [ -z "$exit" ] || { log err "invalid dataset name(s)"; exit $exit; }
 }
 
 function setsnaps() {
     # collect snapshot list
     local snap creation name snapname varname
-    echo -n "Collecting snapshot list... " >&2
+    log debug "collecting snapshot list"
     while read snap creation || { [ "$snap" -eq 0 ] && break || exit $snap; }; do
-        echo -n 
+        #echo -n 
         # read exits 1 on the unterminated single field printf
         name=${snap%@*}
         snapname=${snap#*@}
@@ -164,7 +215,7 @@ function setsnaps() {
         times+=("$creation")
         # < <((check_output ...); printf $?) doesn't work because of set -e
     done < <(($ZFS_LIST) && printf 0 || printf $?)
-    echo "done" >&2
+    log debug "found ${#snaps[@]} snapshots"
 }
 
 
@@ -179,13 +230,15 @@ function calculate_prune() {
     typeset -n prunect="PRUNECT_${varname}"
     local offset="${times[0]}"
     local last=$((offset + 60 * 60))
+    local prune=
     prunect=0
     ops=()
     for period in ${FLAGS[@]}; do
         last=$((last / SECONDS[$period]))
         for (( ; i < ${#snaps[@]}; i++ )); do
             floor=$((times[$i] / SECONDS[$period]))
-            if [ "${PRUNE[$period]}" -ge 0 -a $((offset - ${times[$i]})) -ge ${PRUNE[$period]} ]; then
+            [ -n "${PRUNE[${dataset}-${period}]}" ] && prune=${PRUNE[${dataset}-${period}]} || prune=${PRUNE[$period]}
+            if [ "${prune}" -ge 0 -a $((offset - ${times[$i]})) -ge ${prune} ]; then
                 # reset to epoch seconds for next step
                 last="$((floor * SECONDS[$period]))"
                 offset="${times[$i]}"
@@ -222,28 +275,14 @@ function prune() {
     typeset -n times="TIMES_${varname}"
     typeset -n ops="OPS_${varname}"
     typeset -n prunect="PRUNECT_${varname}"
-    [ "$VERBOSE" -eq 0 ] && echo -n "Pruning $prunect of ${#snaps[@]} snapshots of $dataset...  " >&2
+    log info "pruning $prunect of ${#snaps[@]} snapshots of $dataset"
     for (( i=0 ; i < ${#snaps[@]} ; i++ )); do
         op="${ops[$i]}"
         snap="${dataset}@${snaps[$i]}"
-        if [ "$VERBOSE" -gt 0 ]; then
-            echo "${ops[$i]} $snap"
-        elif [ "${ops[$i]}" == '-' ]; then
-            for (( j=0 ; j < ${#c} ; j++ )); do
-                echo -ne '\b' >&2
-            done
-        fi
-        if [ "${ops[$i]}" == '-' ]; then
-            c=$((c+1))
-            [ "$VERBOSE" -eq 0 ] && echo -n "$c" >&2
-            [ "$DRYRUN" -eq 0 ] && eval $ZFS_DESTROY
-        fi
+        [ "$op" != '+' ] || [ $VERBOSE -gt 0 ] && output info "$op $snap"
+        [ "$op" == '-' ] && [ $DRYRUN -eq 0 ] && eval $ZFS_DESTROY
     done
-    if [ "$VERBOSE" -eq 0 ]; then
-        echo " done" >&2
-    else
-        echo "Pruned $c of ${#snaps[@]} snapshots of $dataset" >&2
-    fi
+    log info "finished pruning $dataset"
 }
 
 function prunes() {
@@ -252,9 +291,12 @@ function prunes() {
     done
 }
 
+readrc
 setopts "$@"
 validate_opts
 validate_datasets
 setsnaps
 calculate_prunes
+get_mutex
 prunes
+rm $MUTEX
