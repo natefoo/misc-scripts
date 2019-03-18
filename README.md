@@ -28,3 +28,7 @@ intervals as they get older.
 ### slurm-view
 
 Views of slurm probably mostly only useful for me (multicluster environment with shifting partition composition).
+
+### zesty-repos
+
+Automatically build RPMs and maintain up-to-date YUM repos of software.
