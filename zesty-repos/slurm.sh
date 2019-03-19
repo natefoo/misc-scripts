@@ -32,7 +32,6 @@ MUNGE_DEPS=()
 
 SLURM_URL='https://download.schedmd.com/slurm'
 SLURM_SHA="${SLURM_URL}/SHA1"
-SLURM_BUILD_SETUP_RUN=false
 SLURM_DEPS=()
 
 SLURM_DRMAA_RELEASE_URL='https://api.github.com/repos/natefoo/slurm-drmaa/releases/latest'
@@ -113,11 +112,9 @@ function check_munge() {
 
 
 function slurm_build_setup() {
-    $SLURM_BUILD_SETUP_RUN && return
     local package=$(tarball_name_version "$MUNGE_TARBALL")
     install_rpm "$package"
     yum install -y mariadb-devel    # not listed as a slurm build dep
-    SLURM_BUILD_SETUP_RUN=true
 }
 
 
@@ -172,7 +169,7 @@ function check_slurm() {
 
         # ensure slurm is up to date
         if ! check_repo_package "$package"; then
-            slurm_build_setup
+            log_call slurm_build_setup
             stage_rpm "$tarball"
         else
             log info "$package already staged or deployed in ${REPO_NAME}/${REPO_VERSION}"

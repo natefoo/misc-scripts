@@ -57,6 +57,7 @@ function isint() {
 
 function runas() {
     # run a command as the build user
+    $DEBUG && echo "\$" "$@" >&2
     HOME="$BUILD_ROOT" su "$USER" -c '"$0" "$@"' -- "$@"
 }
 
@@ -459,7 +460,7 @@ function deploy_repo() {
     yum install -y createrepo
     runas createrepo -v "$dir"
     # deploy to GPEL if desired
-    [ -z "$1" ] && deploy_repo_to_gpel
+    [ -z "$1" ] && deploy_repo_to_gpel "${staged[@]}"
     log_exit
 }
 
