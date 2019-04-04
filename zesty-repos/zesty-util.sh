@@ -458,7 +458,7 @@ function deploy_repo() {
     done
     # generate yum metadata
     yum install -y createrepo
-    runas createrepo -v "$dir"
+    runas createrepo --verbose --excludes '_*' "$dir"
     # deploy to GPEL if desired
     [ -z "$1" ] && deploy_repo_to_gpel "${staged[@]}"
     log_exit
