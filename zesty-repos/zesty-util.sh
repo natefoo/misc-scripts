@@ -387,7 +387,7 @@ function deploy_repo_file() {
         cat >"$tmp" <<EOF
 [${REPO_NAME}-${REPO_VERSION}]
 name=Galaxy ${REPO_NAME} ${REPO_VERSION} packages \$releasever - \$basearch
-baseurl=${YUM_URL_ROOT}/yum/${REPO_NAME}/${REPO_VERSION}/el/\$releasever/\$basearch/
+baseurl=${YUM_URL_ROOT}/package/${REPO_NAME}/${REPO_VERSION}/\$releasever/\$basearch/
 enabled=1
 gpgcheck=0
 EOF
