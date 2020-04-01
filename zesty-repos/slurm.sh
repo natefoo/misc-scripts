@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-# build slurm and friends (munge, slurm-drmaa)
+# build slurm and munge
 
 # prevents fetching if things already exist, sets -x, etc.
 : ${DEVMODE:=false}
@@ -33,10 +33,6 @@ MUNGE_DEPS=()
 SLURM_URL='https://download.schedmd.com/slurm'
 SLURM_SHA="${SLURM_URL}/SHA1"
 SLURM_DEPS=()
-
-SLURM_DRMAA_RELEASE_URL='https://api.github.com/repos/natefoo/slurm-drmaa/releases/latest'
-SLURM_DRMAA_VERSION=
-SLURM_DRMAA_TARBALL=
 
 YUM_ROOT='/yum'
 YUM_URL_ROOT='https://depot.galaxyproject.org/yum'
@@ -113,41 +109,9 @@ function check_munge() {
 
 function slurm_build_setup() {
     local package=$(tarball_name_version "$MUNGE_TARBALL")
+    # FIXME: switch to yum_install_package and remove all the dependency tracking complexity
     install_rpm "$package"
     yum install -y mariadb-devel    # not listed as a slurm build dep
-}
-
-
-function set_slurm_drmaa_facts() {
-    local _slurm_version="$1"
-    if [ -z "$SLURM_DRMAA_VERSION" ]; then
-        SLURM_DRMAA_VERSION="$(curl --silent "$SLURM_DRMAA_RELEASE_URL" | "$JQ" --raw-output '.tag_name')"
-        SLURM_DRMAA_TARBALL="slurm-drmaa-${SLURM_DRMAA_VERSION}.tar.gz"
-        SRC_URLS["slurm-drmaa-${SLURM_DRMAA_VERSION}"]="https://github.com/natefoo/slurm-drmaa/releases/download/${SLURM_DRMAA_VERSION}/${SLURM_DRMAA_TARBALL}"
-    fi
-    case "$REPO_VERSION" in
-        17.02)
-            SLURM_DEPS=("slurm-devel-${_slurm_version}" "slurm-plugins-${_slurm_version}" "munge-${MUNGE_VERSION}" "munge-libs-${MUNGE_VERSION}")
-            ;;
-        *)
-            SLURM_DEPS=("slurm-devel-${_slurm_version}" "munge-${MUNGE_VERSION}" "munge-libs-${MUNGE_VERSION}")
-            ;;
-    esac
-    RPM_DEPS["slurm-${_slurm_version}"]='SLURM_DEPS'
-}
-
-
-function check_slurm_drmaa() {
-    local _slurm_version="$1"
-    install_jq
-    set_slurm_drmaa_facts "${_slurm_version}"
-    log info "slurm-drmaa latest stable: ${SLURM_DRMAA_VERSION}"
-    local package="$(tarball_name_version "$SLURM_DRMAA_TARBALL")"
-    check_repo_package "$package" && { log info "$package already staged or deployed in ${REPO_NAME}/${REPO_VERSION}"; return; }
-    yum install -y mariadb-libs
-    install_rpm "slurm-${_slurm_version}"
-    stage_rpm "slurm-drmaa-${SLURM_DRMAA_VERSION}.tar.gz"
-    uninstall_rpm "slurm-${_slurm_version}"
 }
 
 
@@ -174,12 +138,6 @@ function check_slurm() {
         else
             log info "$package already staged or deployed in ${REPO_NAME}/${REPO_VERSION}"
         fi
-
-        # to avoid conflicts attempting to install munge as a slurm-drmaa dep (rpm fails if it's already installed)
-        uninstall_rpm "munge-${MUNGE_VERSION}"
-
-        # ensure slurm-drmaa is up to date
-        check_slurm_drmaa "$version"
 
         # deploy staging to repo
         deploy_repo

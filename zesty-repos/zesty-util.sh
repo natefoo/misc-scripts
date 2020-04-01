@@ -278,9 +278,9 @@ function build_rpm() {
 
     # build
     if [ "$RPM_DIST" != "$_RPM_DIST_SYSTEM" ]; then
-        runas rpmbuild --define "_topdir ${topdir}" --define "dist ${RPM_DIST}" -ba "${topdir}/SPECS/${specfile}"
+        runas rpmbuild --define "_topdir ${topdir}" --define "dist ${RPM_DIST}" --undefine _disable_source_fetch -ba "${topdir}/SPECS/${specfile}"
     else
-        runas rpmbuild --define "_topdir ${topdir}" -ba "${topdir}/SPECS/${specfile}"
+        runas rpmbuild --define "_topdir ${topdir}" --undefine _disable_source_fetch -ba "${topdir}/SPECS/${specfile}"
     fi
     log_exit
 }
@@ -461,6 +461,63 @@ function deploy_repo() {
     runas createrepo --verbose --excludes '_*' "$dir"
     # deploy to GPEL if desired
     [ -z "$1" ] && deploy_repo_to_gpel "${staged[@]}"
+    log_exit
+}
+
+
+function yum_install_package() {
+    # install rpm(s), e.g. as a build dependency, using yum
+    #
+    # requires:
+    #   rpm(s) to exist in per-package repo (staging is NOT supported), updated repodata
+    # params:
+    #   $1: "package" aka ${name}-${version}
+    # globals:
+    #   $REPO_NAME:     name for per-package yum repos
+    #   $REPO_VERSION:  version for per-package yum repos
+    log_entry "$@"
+    local package="$1"
+    local name="$(package_name "$package")"
+    local yum="$(yum_dir)"
+
+    # return if already installed
+    yum list installed "$name" >/dev/null 2>&1 && return
+
+    local repo_file="/etc/yum.repos.d/${REPO_NAME}-${REPO_VERSION}.repo"
+    if [ ! -f "$repo_file" ]; then
+        cat >"$repo_file" <<EOF
+[${REPO_NAME}-${REPO_VERSION}]
+name=Galaxy ${REPO_NAME} ${REPO_VERSION} packages \$releasever - \$basearch
+baseurl=file://${yum}/
+enabled=0
+gpgcheck=0
+EOF
+    fi
+
+    yum install -y --enablerepo "${REPO_NAME}-${REPO_VERSION}" "$name"
+    log_exit
+}
+
+
+function yum_uninstall_package() {
+    # uninstall rpm(s) using yum
+    #
+    # allows for multiple builds in one session
+    #
+    # params:
+    #   $1: "package" aka ${name}-${version}
+    # globals:
+    #   $REPO_NAME:     name for per-package yum repos
+    #   $REPO_VERSION:  version for per-package yum repos
+    log_entry "$@"
+    local package="$1"
+    local name="$(package_name "$package")"
+
+    # return if already uninstalled
+    ! yum list installed "$name" >/dev/null 2>&1 && return
+
+    yum erase -y "$name"
+    yum autoremove -y
     log_exit
 }
 
