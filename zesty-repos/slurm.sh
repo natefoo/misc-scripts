@@ -60,28 +60,18 @@ function sha_file() {
 
 
 function latest_slurm_tarballs() {
-    major=-1
-    minor=-1
-    latest=
+    # Assumes SHA file is sorted such that the latest for each release are always last
+    declare -A tarballs
     for tb in $(sha_file | awk '{print $NF}' | sort -V | xargs echo); do
         read _major _minor _patch < <(echo "$tb" | sed 's/^slurm-//' | awk -F. -v OFS=' ' '{print $1, $2, $3}')
         read _patch _build < <(echo "$_patch" | awk -F- -v OFS=' ' '{print $1, $2}')
         isint _major && isint _minor && isint _patch && { isintorempty _build || [ $? -eq 1 ] && true; } || continue
-        if [ $major -eq -1 ]; then
-            major=$_major
-            minor=$_minor
-        fi
-        if [ $_major -eq $major -a $_minor -eq $minor ]; then
-            latest="$tb"
-        else
-            echo "$latest"
-            log info "slurm ${major}.${minor} latest stable: ${latest}"
-            major=$_major
-            minor=$_minor
-        fi
+        tarballs["${_major}${_minor}"]="$tb"
     done
-    echo "$latest"
-    log info "slurm ${major}.${minor} latest stable: ${latest}"
+    for release in $(echo "${!tarballs[@]}" | tr ' ' '\n' | sort -n); do
+        echo "${tarballs[$release]}"
+        log info "slurm ${release:0:2}.${release:2} latest stable ${tarballs[$release]}"
+    done
 }
 
 
