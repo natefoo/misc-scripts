@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 
@@ -22,6 +23,7 @@ parser.add_argument('-l', '--list', action='store_true', default=False, help="Li
 parser.add_argument('-v', '--versions', action='store_true', default=False, help="List versions of tool specified in --tool")
 parser.add_argument('-u', '--update', default=None, help="Update YAML file")
 parser.add_argument('-p', '--process', action='store_true', default=False, help="Process test results (if tests are already run)")
+parser.add_argument('-s', '--stats', action='store_true', default=False, help="Stats")
 parser.add_argument('--parallel-tests', default=16)
 args = parser.parse_args()
 
@@ -192,6 +194,7 @@ def test_tool(tool_id):
     cmd = ('galaxy-tool-test', '-k', args.api_key, '-u', args.galaxy, '--parallel-tests', str(args.parallel_tests),
            '--suite-name', tool_id, '-t', tool_id, '-o', out_dir, '-j', results_file,
            '--download-attempts', '32', '--no-history-cleanup', '--test-data', TEST_DATA)
+    print(f"+ {shlex.join(cmd)}")
     try:
         subprocess.run(cmd)
         # reopen so i can write to it while running
@@ -201,7 +204,65 @@ def test_tool(tool_id):
         raise
 
 
-if args.list:
+def print_stats(warnings=False):
+    yaml_tools = read_yaml()
+    all_tools_count = len(yaml_tools)
+    run_tools = list(filter(lambda x: len(x['test_runs']), yaml_tools))
+    run_tools_count = len(run_tools)
+    fixed_tests = 0
+    broken_tests = 0
+    fixed_tools = 0
+    broken_tools = 0
+    uninstalled_tools = 0
+    for tool in run_tools:
+        status = tool.get('status')
+        if status == 'uninstalled':
+            uninstalled_tools += 1
+            continue
+        elif status == 'ok':
+            # forced OK because reasons
+            continue
+        if len(tool['test_runs']) == 1:
+            if warnings:
+                print(f"WARNING: only 1 test run: {tool['id']}")
+            continue
+        first_run_tests = tool['test_runs'][0]['tests']
+        last_run_tests = tool['test_runs'][-1]['tests']
+        fixed_this_tool = False
+        first_run_success = False
+        if len(first_run_tests) != len(last_run_tests):
+            if warnings:
+                print(f"WARNING: test counts do not match for tool: {tool['id']}")
+            continue
+        for i, first_run_test_results in enumerate(first_run_tests):
+            last_run_test_results = last_run_tests[i]
+            if first_run_test_results['status'] != 'success' and last_run_test_results['status'] == 'success':
+                fixed_tests += 1
+                fixed_this_tool = True
+            elif first_run_test_results['status'] == 'success' and last_run_test_results['status'] != 'success':
+                broken_tests += 1
+                if warnings:
+                    print(f"WARNING: broken test: {tool['id']}-{i}")
+            if first_run_test_results['status'] == 'success':
+                # at least one test passed originally
+                first_run_success = True
+        if fixed_this_tool and not first_run_success:
+            fixed_tools += 1
+        elif not fixed_this_tool and not first_run_success:
+            if warnings:
+                print(f"WARNING: tool still broken: {tool['id']}")
+            broken_tools += 1
+    print(f"Tests fixed: {fixed_tests}")
+    print(f"Tests broken: {broken_tests}")
+    print(f"Tools fixed: {fixed_tools}")
+    print(f"Tools still broken: {broken_tools}")
+    print(f"Tools uninstalled {uninstalled_tools}")
+    print(f"{run_tools_count} of {all_tools_count} tools ({(run_tools_count/all_tools_count) * 100:0.2f}%) complete")
+
+
+if args.stats:
+    print_stats(warnings=True)
+elif args.list:
     elems = api_get()
     tool_ids = []
     extract_tools(tool_ids, elems)
@@ -231,5 +292,6 @@ elif args.tool:
     for version in versions:
         print(f">>>> Testing {version}")
         test_tool(version)
+    print_stats()
 else:
     print("Nothing to do (hint: see --help)", file=sys.stderr)
