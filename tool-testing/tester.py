@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+# Yet Another Test Driver for Galaxy tests. Maintains results in a YAML file that's meant to be semi-human readable so
+# you can track the progress (I'm using this while running tests before/after progresively switching Galaxy tools to
+# Singularity).
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -21,10 +25,11 @@ parser.add_argument('-k', '--api-key', default=os.environ.get('GALAXY_API_KEY'),
 parser.add_argument('-t', '--tool', default=None, help="Tool to list/test")
 parser.add_argument('-l', '--list', action='store_true', default=False, help="List latest tool IDs from server")
 parser.add_argument('-v', '--versions', action='store_true', default=False, help="List versions of tool specified in --tool")
-parser.add_argument('-u', '--update', default=None, help="Update YAML file")
+parser.add_argument('-u', '--update', action='store_true', default=False, help="Update YAML file")
 parser.add_argument('-p', '--process', action='store_true', default=False, help="Process test results (if tests are already run)")
 parser.add_argument('-s', '--stats', action='store_true', default=False, help="Stats")
 parser.add_argument('--parallel-tests', default=16)
+parser.add_argument('tools_file', default=None, help="Tools YAML file")
 args = parser.parse_args()
 
 
@@ -83,14 +88,21 @@ def test_dict(tool_ids):
 
 
 def read_yaml():
-    with open(args.update) as fh:
+    with open(args.tools_file) as fh:
         return yaml.safe_load(fh)
 
 
 def write_yaml(yaml_tools):
-    with open(args.update, 'w') as fh:
+    if not args.update:
+        print(f"Skipping write to {args.tools_file} because --update was not specified")
+        return
+    with open(args.tools_file, 'w') as fh:
+        # Note with POSIX locking you can still overwrite another process's writes, but at least you won't both write at
+        # the same time.
+        fcntl.lockf(fh, fcntl.LOCK_EX)
         yaml.dump(yaml_tools, fh)
-        print(f"Updated {args.update}", file=sys.stderr)
+        fcntl.lockf(fh, fcntl.LOCK_UN)
+        print(f"Updated {args.tools_file}", file=sys.stderr)
 
 
 def find_tool_in_list(tools, tool_id, versionless=None):
@@ -124,9 +136,9 @@ def add_versions_to_yaml(dicted_versions):
         versionless = new_tool_dict['id'].rsplit('/', 1)[0]
         index, found = find_tool_in_list(yaml_tools, new_tool_dict['id'], versionless=versionless)
         if found:
-            print(f"Tool already present in {args.update}: {new_tool_dict['id']}")
+            print(f"Tool already present in {args.tools_file}: {new_tool_dict['id']}")
         else:
-            assert index, f"No version of {versionless} found in {args.update}"
+            assert index, f"No version of {versionless} found in {args.tools_file}"
             yaml_tools.insert(index + 1, new_tool_dict)
             updated = True
     if updated:
@@ -144,10 +156,19 @@ def extract_test_results(results_file):
     for test in results['tests']:
         if not rval['date']:
             rval['date'] = test['data'].get('job', {}).get('create_time', '__FAIL__')
-        rval['tests'].append({
+        status = test['data']['status']
+        test_summary = {
             #'index': test['data']['test_index'],
-            'status': test['data']['status'],
-        })
+            'status': status,
+        }
+        if status == 'failure':
+            #job = test['data']['job']
+            # contains duplicates, use set to filter those
+            why = set(test['data'].get('output_problems', ['__UNKNOWN__']))
+            if len(why) == 1:
+                why = why.pop()
+            test_summary['why'] = why
+        rval['tests'].append(test_summary)
     return rval
 
 
@@ -159,23 +180,31 @@ def get_safe_name(tool_id):
     return tool_id.replace('/', ',')
 
 
+def get_results_file_name(tool_id):
+    host = get_host(args.galaxy)
+    safe_name = get_safe_name(tool_id)
+    out_dir = os.path.join(host, safe_name)
+    results_file = os.path.join(out_dir, "test-results.json")
+    return results_file
+
+
 def update_test_results(tool_id, results_file):
-    yaml_tools = read_yaml()
-    index, found = find_tool_in_list(yaml_tools, tool_id)
-    yaml_tools[index]['test_runs'].append(extract_test_results(results_file))
-    write_yaml(yaml_tools)
+    if args.update:
+        yaml_tools = read_yaml()
+        index, found = find_tool_in_list(yaml_tools, tool_id)
+        yaml_tools[index]['test_runs'].append(extract_test_results(results_file))
+        write_yaml(yaml_tools)
 
 
 def process_test_results(tool_id):
     # FIXME: dedup
     yaml_tools = read_yaml()
     index, found = find_tool_in_list(yaml_tools, tool_id)
-    assert found, f"Tool not found in {args.update}: {tool_id}"
-    host = get_host(args.galaxy)
-    safe_name = get_safe_name(tool_id)
-    out_dir = os.path.join(host, safe_name)
-    results_file = os.path.join(out_dir, "test-results.json")
-    yaml_tools[index]['test_runs'].append(extract_test_results(results_file))
+    assert found, f"Tool not found in {args.tools_file}: {tool_id}"
+    results_file = get_results_file_name(tool_id)
+    test_results = extract_test_results(results_file)
+    yaml_tools[index]['test_runs'].append(test_results)
+    print(f"New test results for tool {tool_id}: {test_results}")
     write_yaml(yaml_tools)
 
 
@@ -183,14 +212,12 @@ def test_tool(tool_id):
     assert args.api_key, "Provide an API key with -k/--api-key or $GALAXY_API_KEY"
     yaml_tools = read_yaml()
     index, found = find_tool_in_list(yaml_tools, tool_id)
-    assert found, f"Tool not found in {args.update}: {tool_id}"
-    host = get_host(args.galaxy)
-    safe_name = get_safe_name(tool_id)
-    out_dir = os.path.join(host, safe_name)
+    assert found, f"Tool not found in {args.tools_file}: {tool_id}"
+    results_file = get_results_file_name(tool_id)
+    out_dir = os.path.dirname(results_file)
     if not os.path.exists(out_dir):
         print(f"Creating {out_dir}/", file=sys.stderr)
         os.makedirs(out_dir)
-    results_file = os.path.join(out_dir, "test-results.json")
     cmd = ('galaxy-tool-test', '-k', args.api_key, '-u', args.galaxy, '--parallel-tests', str(args.parallel_tests),
            '--suite-name', tool_id, '-t', tool_id, '-o', out_dir, '-j', results_file,
            '--download-attempts', '32', '--no-history-cleanup', '--test-data', TEST_DATA)
@@ -213,6 +240,7 @@ def print_stats(warnings=False):
     broken_tests = 0
     fixed_tools = 0
     broken_tools = 0
+    still_broken_tools = 0
     uninstalled_tools = 0
     for tool in run_tools:
         status = tool.get('status')
@@ -230,6 +258,7 @@ def print_stats(warnings=False):
         last_run_tests = tool['test_runs'][-1]['tests']
         fixed_this_tool = False
         first_run_success = False
+        last_run_success = False
         if len(first_run_tests) != len(last_run_tests):
             if warnings:
                 print(f"WARNING: test counts do not match for tool: {tool['id']}")
@@ -246,16 +275,23 @@ def print_stats(warnings=False):
             if first_run_test_results['status'] == 'success':
                 # at least one test passed originally
                 first_run_success = True
+            if last_run_test_results['status'] == 'success':
+                last_run_success = True
         if fixed_this_tool and not first_run_success:
             fixed_tools += 1
+        if first_run_success and not last_run_success:
+            if warnings:
+                print(f"WARNING: broken tool: {tool['id']}")
+            broken_tools += 1
         elif not fixed_this_tool and not first_run_success:
             if warnings:
-                print(f"WARNING: tool still broken: {tool['id']}")
-            broken_tools += 1
+                print(f"WARNING: still broken tool: {tool['id']}")
+            still_broken_tools += 1
     print(f"Tests fixed: {fixed_tests}")
     print(f"Tests broken: {broken_tests}")
     print(f"Tools fixed: {fixed_tools}")
-    print(f"Tools still broken: {broken_tools}")
+    print(f"Tools broken: {broken_tools}")
+    print(f"Tools still broken: {still_broken_tools}")
     print(f"Tools uninstalled {uninstalled_tools}")
     print(f"{run_tools_count} of {all_tools_count} tools ({(run_tools_count/all_tools_count) * 100:0.2f}%) complete")
 
@@ -268,7 +304,7 @@ elif args.list:
     extract_tools(tool_ids, elems)
     dicted_ids = test_dict(tool_ids)
     if args.update:
-        with open(args.update, 'w') as fh:
+        with open(args.tools_file, 'w') as fh:
             print(yaml.dump(dicted_ids), file=fh, end='')
         print(f"Updated {args.update}", file=sys.stderr)
     else:
@@ -283,7 +319,6 @@ elif args.versions and args.tool:
 elif args.process and args.tool:
     process_test_results(args.tool)
 elif args.tool:
-    # this option assumes --update
     api_versions = tool_versions(args.tool)
     dicted_versions = test_dict(api_versions)
     add_versions_to_yaml(dicted_versions)
