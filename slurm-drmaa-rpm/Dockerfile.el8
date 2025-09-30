@@ -4,5 +4,5 @@ VOLUME /host
 
 RUN dnf -y group install "Development Tools"
 RUN dnf -y install rpm-build epel-release
-RUN dnf config-manager --set-enabled PowerTools
+RUN dnf config-manager --set-enabled powertools
 RUN dnf -y install slurm slurm-libs slurm-devel

@@ -4,7 +4,7 @@ set -euo pipefail
 EL="$1"
 TAG="slurm-drmaa-build:el$EL"
 
-SLURM_DRMAA_VERSION='1.1.4'
+SLURM_DRMAA_VERSION='1.1.5'
 
 SLURM_DRMAA_TARBALL="slurm-drmaa-${SLURM_DRMAA_VERSION}.tar.gz"
 SLURM_DRMAA_URL="https://github.com/natefoo/slurm-drmaa/releases/download/${SLURM_DRMAA_VERSION}/${SLURM_DRMAA_TARBALL}"
