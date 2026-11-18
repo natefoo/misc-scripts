@@ -31,4 +31,5 @@ Views of slurm probably mostly only useful for me (multicluster environment with
 
 ### zesty-repos
 
-Automatically build RPMs and maintain up-to-date YUM repos of software.
+Automatically build RPMs and maintain up-to-date YUM repos of software. Moved to
+[natefoo/zesty-repos](https://github.com/natefoo/zesty-repos), with its history.
